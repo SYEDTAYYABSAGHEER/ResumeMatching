@@ -3,6 +3,7 @@ import axios from 'axios'
 import './styles.css'
 
 const api = axios.create({ baseURL: 'http://localhost:8000/api' })
+const AUTH_STORAGE_KEY = 'resume_matching_auth_user'
 
 export default function App() {
   const [activePage, setActivePage] = useState('dashboard')
@@ -121,6 +122,20 @@ export default function App() {
 
   useEffect(() => {
     refresh()
+  }, [])
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(AUTH_STORAGE_KEY)
+      if (!saved) return
+      const parsed = JSON.parse(saved)
+      if (!parsed?.email || !parsed?.role) return
+      setCurrentUserName(parsed.full_name || 'User')
+      setUserRole(parsed.role)
+      setIsAuthenticated(true)
+    } catch (e) {
+      localStorage.removeItem(AUTH_STORAGE_KEY)
+    }
   }, [])
 
   const parsedReqs = useMemo(() => {
@@ -440,6 +455,8 @@ export default function App() {
     setSelectedCandidate(null)
     setCandidateAnalysis(null)
     setSelectedJob(null)
+    setLoginPassword('')
+    localStorage.removeItem(AUTH_STORAGE_KEY)
   }
 
   const login = async () => {
@@ -450,6 +467,15 @@ export default function App() {
       setUserRole(res.data.role)
       setCurrentUserName(res.data.full_name)
       setIsAuthenticated(true)
+      localStorage.setItem(
+        AUTH_STORAGE_KEY,
+        JSON.stringify({
+          id: res.data.id,
+          full_name: res.data.full_name,
+          email: res.data.email,
+          role: res.data.role,
+        })
+      )
     } catch (e) {
       const detail = e?.response?.data?.detail || 'Login failed'
       setError(detail)
@@ -492,6 +518,12 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    if (isAuthenticated && userRole === 'admin' && activePage === 'admin-settings') {
+      loadSystemUsers()
+    }
+  }, [isAuthenticated, userRole, activePage])
+
   const navItems = [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'upload-cv', label: 'Upload CV' },
@@ -513,8 +545,8 @@ export default function App() {
           <main className="app-shell">
             <section className="card login-card">
               <h2>Access Blocked</h2>
-              <p className="hint">Your account has been blocked by an administrator.</p>
-              <button className="secondary" onClick={() => setIsBlockedView(false)}>Back to Login</button>
+              <p className="hint">Your access is blocked by admin.</p>
+              <button className="danger" onClick={logout}>Logout</button>
             </section>
           </main>
         </div>
