@@ -98,7 +98,9 @@ If you do not run worker/scheduler, manual matching still works via:
 ## Notes
 
 - Scoring currently uses deterministic open-source rule logic (no paid LLM).
-- You can later plug in Ollama/vLLM model calls inside `app/services/scoring.py`.
+- Optional open-source LLM layer is supported via Ollama (`app/services/llm_evaluator.py`).
+- Enable with env vars: `LLM_ENABLED=true`, `LLM_PROVIDER=ollama`, `LLM_MODEL=<model>`, `LLM_BASE_URL=http://localhost:11434`.
+- Evaluator runs a 6-step reasoning loop per requirement (Read Requirement, Search CV, Assess Evidence, Assign Score, Self-Critique, Finalise & Cite).
 - Local mode is fully supported without Docker; Docker is optional.
 - Resume upload parser supports `PDF`, `DOCX`, and `CSV`.
 - Uploaded resume files are stored in MinIO when MinIO is configured and reachable.

@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     minio_bucket: str = 'resumes'
 
     qdrant_url: str = 'http://localhost:6333'
+    llm_enabled: bool = False
+    llm_provider: str = 'ollama'
+    llm_model: str = 'mistral:7b-instruct'
+    llm_base_url: str = 'http://localhost:11434'
+    llm_timeout_seconds: int = 60
 
 
 settings = Settings()

@@ -134,6 +134,112 @@ def get_candidate(candidate_id: int, db: Session = Depends(get_db)):
     return candidate
 
 
+def _extract_key_skills(raw_text: str) -> list[str]:
+    skill_keywords = [
+        'python', 'fastapi', 'django', 'flask', 'react', 'typescript', 'javascript',
+        'aws', 'docker', 'kubernetes', 'sql', 'postgresql', 'pandas', 'machine', 'learning',
+        'nlp', 'redis', 'celery', 'terraform', 'linux',
+    ]
+    text = raw_text.lower()
+    found = []
+    for skill in skill_keywords:
+        if skill in text:
+            found.append(skill.upper() if skill in {'aws', 'nlp', 'sql'} else skill.title())
+    return found[:8]
+
+
+def _cv_improvement_suggestions(raw_text: str) -> list[str]:
+    suggestions = []
+    if len(raw_text.strip()) < 250:
+        suggestions.append('Expand CV bullets with measurable impact (numbers, scope, outcomes).')
+    if '\n' not in raw_text:
+        suggestions.append('Improve readability by splitting content into clear sections and bullet points.')
+    if raw_text and raw_text == raw_text.lower():
+        suggestions.append('Use consistent capitalization for technologies, roles, and headings.')
+    if ',' in raw_text and '-' not in raw_text and '•' not in raw_text:
+        suggestions.append('Convert comma-separated skills into a structured skills section for recruiter scanning.')
+    if not suggestions:
+        suggestions.append('Keep evidence statements specific: include technology + action + business result per bullet.')
+    return suggestions
+
+
+@router.get('/candidates/{candidate_id}/analysis')
+def candidate_analysis(candidate_id: int, db: Session = Depends(get_db)):
+    candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail='Candidate not found')
+
+    best_match = (
+        db.query(MatchResult)
+        .filter(MatchResult.candidate_id == candidate_id)
+        .order_by(MatchResult.total_score_percent.desc())
+        .first()
+    )
+    if not best_match:
+        return {
+            'section_a': {
+                'name': candidate.full_name,
+                'current_title': candidate.current_title,
+                'total_score_percent': 0,
+                'match_level': 'unscored',
+                'years_of_experience': candidate.years_of_experience,
+                'key_skills': _extract_key_skills(candidate.raw_text or ''),
+                'location': candidate.location or 'Not specified',
+                'availability': 'Not specified',
+            },
+            'section_b': [],
+            'section_c': [],
+            'section_d': [],
+            'section_e': _cv_improvement_suggestions(candidate.raw_text or ''),
+        }
+
+    job = db.query(Job).filter(Job.id == best_match.job_id).first()
+    rows = (
+        db.query(RequirementScore, JobRequirement)
+        .join(JobRequirement, RequirementScore.requirement_id == JobRequirement.id)
+        .filter(
+            RequirementScore.candidate_id == candidate_id,
+            RequirementScore.job_id == best_match.job_id,
+        )
+        .all()
+    )
+
+    section_b = [
+        {
+            'requirement': req.requirement_text,
+            'score': score.score,
+            'evidence_from_cv': score.evidence,
+            'confidence_level': score.confidence,
+            'gap_type': score.gap_type,
+            'notes': score.notes,
+        }
+        for score, req in rows
+    ]
+    section_c = [f"{item['requirement']} ({item['confidence_level']})" for item in section_b if item['score'] >= 1.0][:5]
+    section_d = [f"{item['requirement']} ({item['gap_type']})" for item in section_b if item['score'] <= 0.0][:5]
+
+    return {
+        'job_context': {
+            'job_id': best_match.job_id,
+            'job_title': job.title if job else f'Job #{best_match.job_id}',
+        },
+        'section_a': {
+            'name': candidate.full_name,
+            'current_title': candidate.current_title,
+            'total_score_percent': best_match.total_score_percent,
+            'match_level': best_match.match_level.value,
+            'years_of_experience': candidate.years_of_experience,
+            'key_skills': _extract_key_skills(candidate.raw_text or ''),
+            'location': candidate.location or 'Not specified',
+            'availability': 'Not specified',
+        },
+        'section_b': section_b,
+        'section_c': section_c,
+        'section_d': section_d,
+        'section_e': _cv_improvement_suggestions(candidate.raw_text or ''),
+    }
+
+
 @router.put('/candidates/{candidate_id}')
 def update_candidate(candidate_id: int, payload: CandidateUpdate, db: Session = Depends(get_db)):
     candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()

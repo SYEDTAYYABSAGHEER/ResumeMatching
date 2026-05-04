@@ -29,6 +29,7 @@ export default function App() {
   const [editTitle, setEditTitle] = useState('')
   const [editExp, setEditExp] = useState('')
   const [editRawText, setEditRawText] = useState('')
+  const [candidateAnalysis, setCandidateAnalysis] = useState(null)
   const [selectedJob, setSelectedJob] = useState(null)
   const [editingJob, setEditingJob] = useState(null)
   const [editJobTitle, setEditJobTitle] = useState('')
@@ -36,6 +37,7 @@ export default function App() {
   const [editJobLocation, setEditJobLocation] = useState('')
   const [editJobSeniority, setEditJobSeniority] = useState('')
   const [editJobDescription, setEditJobDescription] = useState('')
+  const [previousPage, setPreviousPage] = useState('candidates')
 
   const refresh = async () => {
     const [c, j, m, d] = await Promise.all([
@@ -81,11 +83,6 @@ export default function App() {
     if (!selectedJob) return []
     return matches.filter((m) => m.job_id === selectedJob.id)
   }, [matches, selectedJob])
-
-  const selectedCandidateMatches = useMemo(() => {
-    if (!selectedCandidate) return []
-    return matches.filter((m) => m.candidate_id === selectedCandidate.id)
-  }, [matches, selectedCandidate])
 
   const addActivity = (text) => {
     setActivity((prev) => [text, ...prev].slice(0, 8))
@@ -175,9 +172,15 @@ export default function App() {
   const viewCandidate = async (candidateId) => {
     try {
       setError('')
-      const res = await api.get(`/candidates/${candidateId}`)
-      setSelectedCandidate(res.data)
+      const [candidateRes, analysisRes] = await Promise.all([
+        api.get(`/candidates/${candidateId}`),
+        api.get(`/candidates/${candidateId}/analysis`),
+      ])
+      setSelectedCandidate(candidateRes.data)
+      setCandidateAnalysis(analysisRes.data)
       setEditingCandidate(null)
+      setPreviousPage(activePage)
+      setActivePage('candidate-analysis')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to load candidate')
     }
@@ -194,6 +197,7 @@ export default function App() {
       setEditExp(String(candidate.years_of_experience ?? '0'))
       setEditRawText(candidate.raw_text || '')
       setSelectedCandidate(null)
+      setCandidateAnalysis(null)
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to load candidate for editing')
     }
@@ -232,6 +236,7 @@ export default function App() {
       await api.delete(`/candidates/${candidateId}`)
       if (selectedCandidate?.id === candidateId) setSelectedCandidate(null)
       if (editingCandidate === candidateId) setEditingCandidate(null)
+      setCandidateAnalysis(null)
       await refresh()
       addActivity(`Candidate "${candidateName}" deleted`)
     } catch (e) {
@@ -424,46 +429,6 @@ export default function App() {
                 ))}
               </ul>
             </div>
-            {selectedCandidate ? (
-              <div className="card">
-                <h2>Candidate Details</h2>
-                <p><strong>Name:</strong> {selectedCandidate.full_name}</p>
-                <p><strong>Title:</strong> {selectedCandidate.current_title || '-'}</p>
-                <p><strong>Experience:</strong> {selectedCandidate.years_of_experience ?? 0} years</p>
-                <p><strong>CV Text:</strong></p>
-                <textarea className="input" rows={8} value={selectedCandidate.raw_text || ''} readOnly />
-                <p><strong>Matches for this Candidate ({selectedCandidateMatches.length}):</strong></p>
-                {selectedCandidateMatches.length ? (
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Job</th>
-                          <th>Score %</th>
-                          <th>Level</th>
-                          <th>Risk</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedCandidateMatches.map((m) => {
-                          const job = jobs.find((j) => j.id === m.job_id)
-                          return (
-                            <tr key={m.id}>
-                              <td>{job?.title || `Job #${m.job_id}`}</td>
-                              <td>{m.total_score_percent}</td>
-                              <td>{m.match_level}</td>
-                              <td>{String(m.risk_flag)}</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="hint">No matches yet for this candidate. Run Full Matching to generate results.</p>
-                )}
-              </div>
-            ) : null}
             {editingCandidate ? (
               <div className="card">
                 <h2>Edit Candidate</h2>
@@ -477,6 +442,116 @@ export default function App() {
                 </div>
               </div>
             ) : null}
+          </section>
+        ) : null}
+
+        {activePage === 'candidate-analysis' ? (
+          <section className="card">
+            <div className="analysis-header">
+              <div>
+                <h2>Candidate Analysis Output</h2>
+                <p className="hint">
+                  {candidateAnalysis?.job_context
+                    ? `Based on best matched job: ${candidateAnalysis.job_context.job_title}`
+                    : 'No matched job found yet'}
+                </p>
+              </div>
+              <div className="inline-actions">
+                <span className={`badge ${String(candidateAnalysis?.section_a?.match_level || 'unscored').toLowerCase()}`}>
+                  {(candidateAnalysis?.section_a?.match_level || 'unscored').toUpperCase()}
+                </span>
+                <button className="secondary small" onClick={() => setActivePage(previousPage || 'candidates')}>
+                  Back
+                </button>
+              </div>
+            </div>
+
+            <section className="analysis-section">
+              <h3>Section A: Candidate Summary Card</h3>
+              <div className="summary-grid professional">
+                <div className="summary-item"><span>Name</span><strong>{candidateAnalysis?.section_a?.name || selectedCandidate?.full_name}</strong></div>
+                <div className="summary-item"><span>Current title</span><strong>{candidateAnalysis?.section_a?.current_title || '-'}</strong></div>
+                <div className="summary-item"><span>Total score %</span><strong>{candidateAnalysis?.section_a?.total_score_percent ?? 0}</strong></div>
+                <div className="summary-item"><span>Years of experience</span><strong>{candidateAnalysis?.section_a?.years_of_experience ?? 0}</strong></div>
+                <div className="summary-item"><span>Location</span><strong>{candidateAnalysis?.section_a?.location || '-'}</strong></div>
+                <div className="summary-item"><span>Availability</span><strong>{candidateAnalysis?.section_a?.availability || '-'}</strong></div>
+              </div>
+              <div className="chips">
+                {(candidateAnalysis?.section_a?.key_skills || []).length
+                  ? candidateAnalysis.section_a.key_skills.map((skill, idx) => <span className="chip" key={`${skill}-${idx}`}>{skill}</span>)
+                  : <span className="hint">No key skills extracted</span>}
+              </div>
+            </section>
+
+            <section className="analysis-section">
+              <h3>Section B: Detailed Requirement Scoring Table</h3>
+              <div className="analysis-kpis">
+                <div className="kpi"><span>Total Requirements</span><strong>{(candidateAnalysis?.section_b || []).length}</strong></div>
+                <div className="kpi"><span>Strongly Demonstrated</span><strong>{(candidateAnalysis?.section_b || []).filter((item) => item.score >= 1).length}</strong></div>
+                <div className="kpi"><span>Gaps</span><strong>{(candidateAnalysis?.section_b || []).filter((item) => item.score <= 0).length}</strong></div>
+              </div>
+              {(candidateAnalysis?.section_b || []).length ? (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Requirement</th>
+                        <th>Score</th>
+                        <th>Evidence from CV</th>
+                        <th>Confidence level</th>
+                        <th>Gap type</th>
+                        <th>Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(candidateAnalysis?.section_b || []).map((item, idx) => (
+                        <tr key={`${item.requirement}-${idx}`}>
+                          <td>{item.requirement}</td>
+                          <td>{item.score}</td>
+                          <td>{item.evidence_from_cv || '-'}</td>
+                          <td>{item.confidence_level}</td>
+                          <td>{item.gap_type}</td>
+                          <td>{item.notes}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="hint">No requirement-level scoring yet. Run Full Matching to generate this section.</p>
+              )}
+            </section>
+
+            <section className="analysis-section split">
+              <div>
+                <h3>Section C: Key Strengths</h3>
+                <ul className="list">
+                  {(candidateAnalysis?.section_c || []).length
+                    ? candidateAnalysis.section_c.map((item, idx) => <li key={`strength-${idx}`}>{item}</li>)
+                    : <li>No key strengths identified yet.</li>}
+                </ul>
+              </div>
+              <div>
+                <h3>Section D: Key Gaps</h3>
+                <ul className="list">
+                  {(candidateAnalysis?.section_d || []).length
+                    ? candidateAnalysis.section_d.map((item, idx) => <li key={`gap-${idx}`}>{item}</li>)
+                    : <li>No major gaps identified yet.</li>}
+                </ul>
+              </div>
+            </section>
+
+            <section className="analysis-section">
+              <h3>Section E: CV Improvement Suggestions</h3>
+              <ul className="list">
+                {(candidateAnalysis?.section_e || []).map((item, idx) => <li key={`suggestion-${idx}`}>{item}</li>)}
+              </ul>
+            </section>
+
+            <section className="analysis-section">
+              <h3>Original CV Text</h3>
+              <textarea className="input" rows={8} value={selectedCandidate?.raw_text || ''} readOnly />
+            </section>
           </section>
         ) : null}
 
