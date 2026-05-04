@@ -14,7 +14,7 @@ from app.db.session import get_db
 from app.models.entities import Candidate, Job, JobRequirement, MatchResult, RequirementScore, RequirementType
 from app.schemas.schemas import CandidateCreate, CandidateUpdate, JobCreate, JobUpdate, MatchResponse
 from app.services.matching import run_full_matching
-from app.services.parsers import extract_text_from_csv_bytes, extract_text_from_docx, extract_text_from_pdf
+from app.services.parsers import extract_candidate_profile, extract_text_from_csv_bytes, extract_text_from_docx, extract_text_from_pdf
 from app.services.scoring import score_candidate_for_job
 from app.services.storage import safe_upload_bytes_to_minio
 
@@ -63,7 +63,16 @@ def health():
 
 @router.post('/candidates')
 def create_candidate(payload: CandidateCreate, db: Session = Depends(get_db)):
-    candidate = Candidate(**payload.model_dump())
+    data = payload.model_dump()
+    profile = extract_candidate_profile(data.get('raw_text', ''))
+    data['email'] = data.get('email') or profile.get('parsed_email')
+    data['phone'] = data.get('phone') or profile.get('parsed_phone')
+    data['location'] = data.get('location') or profile.get('parsed_location')
+    data['current_title'] = data.get('current_title') or profile.get('parsed_current_title')
+    if profile.get('parsed_years_of_experience') is not None and not data.get('years_of_experience'):
+        data['years_of_experience'] = profile['parsed_years_of_experience']
+    data['profile_json'] = {k: v for k, v in profile.items() if not k.startswith('parsed_')}
+    candidate = Candidate(**data)
     db.add(candidate)
     db.commit()
     db.refresh(candidate)
@@ -79,8 +88,18 @@ def upload_candidate_cv(
     file_bytes = file.file.read()
     raw_text = _parse_resume_file(file.filename, file_bytes)
     minio_path = safe_upload_bytes_to_minio(file_bytes, file.filename, file.content_type or 'application/octet-stream')
+    profile = extract_candidate_profile(raw_text)
 
-    candidate = Candidate(full_name=full_name, raw_text=raw_text, profile_json={'source': 'local_upload', 'minio_object': minio_path})
+    candidate = Candidate(
+        full_name=full_name,
+        raw_text=raw_text,
+        email=profile.get('parsed_email'),
+        phone=profile.get('parsed_phone'),
+        location=profile.get('parsed_location'),
+        current_title=profile.get('parsed_current_title'),
+        years_of_experience=profile.get('parsed_years_of_experience') or 0,
+        profile_json={'source': 'local_upload', 'minio_object': minio_path, **{k: v for k, v in profile.items() if not k.startswith('parsed_')}},
+    )
     db.add(candidate)
     db.commit()
     db.refresh(candidate)
@@ -109,11 +128,22 @@ def upload_candidate_from_google_drive(
 
     raw_text = _parse_resume_file(filename, file_bytes)
     minio_path = safe_upload_bytes_to_minio(file_bytes, filename, response.headers.get('content-type', 'application/octet-stream'))
+    profile = extract_candidate_profile(raw_text)
 
     candidate = Candidate(
         full_name=full_name,
         raw_text=raw_text,
-        profile_json={'source': 'google_drive', 'drive_url': drive_url, 'minio_object': minio_path},
+        email=profile.get('parsed_email'),
+        phone=profile.get('parsed_phone'),
+        location=profile.get('parsed_location'),
+        current_title=profile.get('parsed_current_title'),
+        years_of_experience=profile.get('parsed_years_of_experience') or 0,
+        profile_json={
+            'source': 'google_drive',
+            'drive_url': drive_url,
+            'minio_object': minio_path,
+            **{k: v for k, v in profile.items() if not k.startswith('parsed_')},
+        },
     )
     db.add(candidate)
     db.commit()
@@ -247,6 +277,15 @@ def update_candidate(candidate_id: int, payload: CandidateUpdate, db: Session = 
         raise HTTPException(status_code=404, detail='Candidate not found')
 
     updates = payload.model_dump(exclude_unset=True)
+    if 'raw_text' in updates and 'profile_json' not in updates:
+        parsed_profile = extract_candidate_profile(updates.get('raw_text') or '')
+        updates['profile_json'] = {k: v for k, v in parsed_profile.items() if not k.startswith('parsed_')}
+        updates['email'] = updates.get('email') or parsed_profile.get('parsed_email') or candidate.email
+        updates['phone'] = updates.get('phone') or parsed_profile.get('parsed_phone') or candidate.phone
+        updates['location'] = updates.get('location') or parsed_profile.get('parsed_location') or candidate.location
+        updates['current_title'] = updates.get('current_title') or parsed_profile.get('parsed_current_title') or candidate.current_title
+        if updates.get('years_of_experience') in (None, 0):
+            updates['years_of_experience'] = parsed_profile.get('parsed_years_of_experience') or candidate.years_of_experience
     for key, value in updates.items():
         setattr(candidate, key, value)
 
