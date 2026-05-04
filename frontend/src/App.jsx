@@ -13,10 +13,12 @@ export default function App() {
   const [registerName, setRegisterName] = useState('')
   const [registerEmail, setRegisterEmail] = useState('')
   const [registerPassword, setRegisterPassword] = useState('')
+  const [authTab, setAuthTab] = useState('login')
   const [userRole, setUserRole] = useState('recruiter')
   const [currentUserName, setCurrentUserName] = useState('')
   const [isBlockedView, setIsBlockedView] = useState(false)
   const [systemUsers, setSystemUsers] = useState([])
+  const [toast, setToast] = useState(null)
   const [candidates, setCandidates] = useState([])
   const [jobs, setJobs] = useState([])
   const [matches, setMatches] = useState([])
@@ -170,6 +172,16 @@ export default function App() {
     setActivity((prev) => [text, ...prev].slice(0, 8))
   }
 
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type })
+  }
+
+  useEffect(() => {
+    if (!toast) return
+    const timer = setTimeout(() => setToast(null), 3000)
+    return () => clearTimeout(timer)
+  }, [toast])
+
   const createCandidate = async () => {
     if (!candidateName || !candidateText) return
     try {
@@ -184,6 +196,7 @@ export default function App() {
       setCandidateText('')
       await refresh()
       addActivity(`Candidate "${candidateName}" created manually`)
+      showToast('Candidate created successfully')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to create candidate')
     } finally {
@@ -210,6 +223,7 @@ export default function App() {
       setUploadProgress(0)
       await refresh()
       addActivity(`Candidate "${candidateName}" uploaded from file`)
+      showToast('CV uploaded and candidate created')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to upload CV file')
     } finally {
@@ -230,6 +244,7 @@ export default function App() {
       setDriveUrl('')
       await refresh()
       addActivity(`Candidate "${driveName}" imported from Google Drive`)
+      showToast('Candidate imported from Google Drive')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to import from Google Drive')
     } finally {
@@ -251,6 +266,7 @@ export default function App() {
       setJobDesc('')
       await refresh()
       addActivity(`Job "${jobTitle}" created`)
+      showToast('Job saved successfully')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to create job')
     } finally {
@@ -309,6 +325,7 @@ export default function App() {
       setEditingCandidate(null)
       await refresh()
       addActivity(`Candidate "${editName}" updated`)
+      showToast('Candidate updated successfully')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to update candidate')
     } finally {
@@ -328,6 +345,7 @@ export default function App() {
       setCandidateAnalysis(null)
       await refresh()
       addActivity(`Candidate "${candidateName}" deleted`)
+      showToast('Candidate deleted')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to delete candidate')
     } finally {
@@ -381,6 +399,7 @@ export default function App() {
       setEditingJob(null)
       await refresh()
       addActivity(`Job "${editJobTitle}" updated`)
+      showToast('Job updated successfully')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to update job')
     } finally {
@@ -399,6 +418,7 @@ export default function App() {
       if (editingJob === jobId) setEditingJob(null)
       await refresh()
       addActivity(`Job "${jobTitleValue}" deleted`)
+      showToast('Job deleted')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to delete job')
     } finally {
@@ -413,6 +433,7 @@ export default function App() {
       await api.post('/match/run-all')
       await refresh()
       addActivity('Full matching pipeline executed')
+      showToast('Matching pipeline completed')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to run matching')
     } finally {
@@ -445,7 +466,7 @@ export default function App() {
   const sendOutreach = () => {
     if (!selectedOutreachMatch) return
     addActivity(`Outreach email prepared for Candidate #${selectedOutreachMatch.candidate_id} and Job #${selectedOutreachMatch.job_id}`)
-    window.alert('Outreach email marked as sent (demo flow).')
+    showToast('Outreach email marked as sent')
   }
 
   const logout = () => {
@@ -476,6 +497,7 @@ export default function App() {
           role: res.data.role,
         })
       )
+      showToast('Login successful')
     } catch (e) {
       const detail = e?.response?.data?.detail || 'Login failed'
       setError(detail)
@@ -501,7 +523,8 @@ export default function App() {
       setRegisterEmail('')
       setRegisterPassword('')
       addActivity('Recruiter account registered')
-      window.alert('Registration successful. You can now login.')
+      showToast('Registration successful. Please login.')
+      setAuthTab('login')
     } catch (e) {
       setError(e?.response?.data?.detail || 'Registration failed')
     }
@@ -513,6 +536,7 @@ export default function App() {
       await api.patch(`/auth/users/${userId}/status`, { is_active: nextActive })
       await loadSystemUsers()
       addActivity(`User ${nextActive ? 'unblocked' : 'blocked'} by admin`)
+      showToast(`User ${nextActive ? 'unblocked' : 'blocked'} successfully`)
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to update user status')
     }
@@ -548,6 +572,7 @@ export default function App() {
               <p className="hint">Your access is blocked by admin.</p>
               <button className="danger" onClick={logout}>Logout</button>
             </section>
+            {toast ? <div className={`toast ${toast.type}`}>{toast.message}</div> : null}
           </main>
         </div>
       )
@@ -559,25 +584,29 @@ export default function App() {
             <h2>Login Screen</h2>
             <p className="hint">Auth entry point</p>
             {error ? <div className="error-box">{error}</div> : null}
-            <input className="input" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="Email" />
-            <input className="input" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} placeholder="Password" />
-            <p className="hint">Role will be determined by registered account credentials.</p>
-            <button
-              className="primary"
-              onClick={login}
-              disabled={!loginEmail || !loginPassword}
-            >
-              Sign in
-            </button>
-            <hr />
-            <h3>Recruiter Registration</h3>
-            <input className="input" value={registerName} onChange={(e) => setRegisterName(e.target.value)} placeholder="Full name" />
-            <input className="input" value={registerEmail} onChange={(e) => setRegisterEmail(e.target.value)} placeholder="Recruiter email" />
-            <input className="input" type="password" value={registerPassword} onChange={(e) => setRegisterPassword(e.target.value)} placeholder="Password (min 6)" />
-            <button className="secondary" onClick={registerRecruiter} disabled={!registerName || !registerEmail || !registerPassword}>
-              Register Recruiter
-            </button>
+            <div className="auth-tabs">
+              <button className={`tab-btn ${authTab === 'login' ? 'active' : ''}`} onClick={() => setAuthTab('login')}>Login</button>
+              <button className={`tab-btn ${authTab === 'register' ? 'active' : ''}`} onClick={() => setAuthTab('register')}>Register</button>
+            </div>
+            {authTab === 'login' ? (
+              <>
+                <input className="input" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="Email" />
+                <input className="input" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} placeholder="Password" />
+                <p className="hint">Role will be determined by registered account credentials.</p>
+                <button className="primary" onClick={login} disabled={!loginEmail || !loginPassword}>Sign in</button>
+              </>
+            ) : (
+              <>
+                <input className="input" value={registerName} onChange={(e) => setRegisterName(e.target.value)} placeholder="Full name" />
+                <input className="input" value={registerEmail} onChange={(e) => setRegisterEmail(e.target.value)} placeholder="Recruiter email" />
+                <input className="input" type="password" value={registerPassword} onChange={(e) => setRegisterPassword(e.target.value)} placeholder="Password (min 6)" />
+                <button className="secondary" onClick={registerRecruiter} disabled={!registerName || !registerEmail || !registerPassword}>
+                  Register Recruiter
+                </button>
+              </>
+            )}
           </section>
+          {toast ? <div className={`toast ${toast.type}`}>{toast.message}</div> : null}
         </main>
       </div>
     )
@@ -623,6 +652,7 @@ export default function App() {
         </header>
 
         {error ? <div className="error-box">{error}</div> : null}
+        {toast ? <div className={`toast ${toast.type}`}>{toast.message}</div> : null}
 
         {activePage === 'dashboard' ? (
           <>
@@ -856,7 +886,17 @@ export default function App() {
               <input className="input" type="file" accept=".pdf,.docx,.csv" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
               <p className="hint">Supported: PDF, DOCX, CSV</p>
               <button className="secondary" onClick={uploadCandidateFile} disabled={loading}>Upload and Parse</button>
-              {uploadProgress > 0 ? <p className="hint">Upload progress: {uploadProgress}%</p> : null}
+              {uploadProgress > 0 ? (
+                <div className="progress-wrap">
+                  <div className="progress-head">
+                    <span className="hint">Upload progress</span>
+                    <span className="hint">{uploadProgress}%</span>
+                  </div>
+                  <div className="progress-track">
+                    <div className="progress-fill" style={{ width: `${uploadProgress}%` }} />
+                  </div>
+                </div>
+              ) : null}
             </div>
             <div className="card">
               <h2>Import from Google Drive</h2>
