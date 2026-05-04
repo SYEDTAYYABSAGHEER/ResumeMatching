@@ -11,6 +11,37 @@ class CandidateCreate(BaseModel):
     raw_text: str = ''
 
 
+class UserRegister(BaseModel):
+    full_name: str
+    email: str
+    password: str
+    role: str = 'recruiter'
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+class UserAuthResponse(BaseModel):
+    id: int
+    full_name: str
+    email: str
+    role: str
+
+
+class UserListItem(BaseModel):
+    id: int
+    full_name: str
+    email: str
+    role: str
+    is_active: bool
+
+
+class UserStatusUpdate(BaseModel):
+    is_active: bool
+
+
 class CandidateUpdate(BaseModel):
     full_name: str | None = None
     email: str | None = None

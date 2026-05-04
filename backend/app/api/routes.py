@@ -11,14 +11,99 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, Upl
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.entities import Candidate, Job, JobRequirement, MatchResult, RequirementScore, RequirementType
-from app.schemas.schemas import CandidateCreate, CandidateUpdate, JobCreate, JobUpdate, MatchResponse
+from app.models.entities import Candidate, Job, JobRequirement, MatchResult, RequirementScore, RequirementType, User, UserRole
+from app.schemas.schemas import CandidateCreate, CandidateUpdate, JobCreate, JobUpdate, MatchResponse, UserAuthResponse, UserListItem, UserLogin, UserRegister, UserStatusUpdate
 from app.services.matching import run_full_matching
+from app.services.auth import hash_password, verify_password
 from app.services.parsers import extract_candidate_profile, extract_text_from_csv_bytes, extract_text_from_docx, extract_text_from_pdf
 from app.services.scoring import score_candidate_for_job
 from app.services.storage import safe_upload_bytes_to_minio
 
 router = APIRouter(prefix='/api', tags=['api'])
+
+
+def ensure_default_admin(db: Session):
+    existing_admin = db.query(User).filter(User.role == UserRole.admin).first()
+    if existing_admin:
+        return
+    admin = User(
+        full_name='System Admin',
+        email='admin@example.com',
+        password_hash=hash_password('admin123'),
+        role=UserRole.admin,
+    )
+    db.add(admin)
+    db.commit()
+
+
+@router.post('/auth/register', response_model=UserAuthResponse)
+def register_user(payload: UserRegister, db: Session = Depends(get_db)):
+    role = payload.role.lower().strip() if payload.role else 'recruiter'
+    if role not in {'recruiter', 'admin'}:
+        raise HTTPException(status_code=400, detail='Role must be recruiter or admin')
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail='Password must be at least 6 characters')
+
+    existing = db.query(User).filter(User.email == payload.email.lower().strip()).first()
+    if existing:
+        raise HTTPException(status_code=400, detail='User already exists with this email')
+
+    user = User(
+        full_name=payload.full_name.strip(),
+        email=payload.email.lower().strip(),
+        password_hash=hash_password(payload.password),
+        role=UserRole(role),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return UserAuthResponse(id=user.id, full_name=user.full_name, email=user.email, role=user.role.value)
+
+
+@router.post('/auth/login', response_model=UserAuthResponse)
+def login_user(payload: UserLogin, db: Session = Depends(get_db)):
+    ensure_default_admin(db)
+    user = db.query(User).filter(User.email == payload.email.lower().strip()).first()
+    if not user:
+        raise HTTPException(status_code=401, detail='Invalid credentials')
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail='Access blocked by admin')
+    if not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail='Invalid credentials')
+    return UserAuthResponse(id=user.id, full_name=user.full_name, email=user.email, role=user.role.value)
+
+
+@router.get('/auth/users', response_model=list[UserListItem])
+def list_users(db: Session = Depends(get_db)):
+    ensure_default_admin(db)
+    users = db.query(User).order_by(User.created_at.desc()).all()
+    return [
+        UserListItem(
+            id=user.id,
+            full_name=user.full_name,
+            email=user.email,
+            role=user.role.value,
+            is_active=user.is_active,
+        )
+        for user in users
+    ]
+
+
+@router.patch('/auth/users/{user_id}/status', response_model=UserListItem)
+def update_user_status(user_id: int, payload: UserStatusUpdate, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail='User not found')
+    user.is_active = payload.is_active
+    db.commit()
+    db.refresh(user)
+    return UserListItem(
+        id=user.id,
+        full_name=user.full_name,
+        email=user.email,
+        role=user.role.value,
+        is_active=user.is_active,
+    )
 
 
 def _file_id_from_google_drive_url(url: str) -> str | None:

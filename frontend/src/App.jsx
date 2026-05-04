@@ -9,8 +9,13 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [loginEmail, setLoginEmail] = useState('admin@example.com')
   const [loginPassword, setLoginPassword] = useState('password')
-  const [loginRole, setLoginRole] = useState('recruiter')
+  const [registerName, setRegisterName] = useState('')
+  const [registerEmail, setRegisterEmail] = useState('')
+  const [registerPassword, setRegisterPassword] = useState('')
   const [userRole, setUserRole] = useState('recruiter')
+  const [currentUserName, setCurrentUserName] = useState('')
+  const [isBlockedView, setIsBlockedView] = useState(false)
+  const [systemUsers, setSystemUsers] = useState([])
   const [candidates, setCandidates] = useState([])
   const [jobs, setJobs] = useState([])
   const [matches, setMatches] = useState([])
@@ -103,6 +108,15 @@ export default function App() {
     setJobs(j.data)
     setMatches(m.data)
     setDashboard(d.data)
+  }
+
+  const loadSystemUsers = async () => {
+    try {
+      const res = await api.get('/auth/users')
+      setSystemUsers(res.data)
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Failed to load users')
+    }
   }
 
   useEffect(() => {
@@ -421,10 +435,61 @@ export default function App() {
 
   const logout = () => {
     setIsAuthenticated(false)
+    setIsBlockedView(false)
     setActivePage('dashboard')
     setSelectedCandidate(null)
     setCandidateAnalysis(null)
     setSelectedJob(null)
+  }
+
+  const login = async () => {
+    try {
+      setError('')
+      setIsBlockedView(false)
+      const res = await api.post('/auth/login', { email: loginEmail, password: loginPassword })
+      setUserRole(res.data.role)
+      setCurrentUserName(res.data.full_name)
+      setIsAuthenticated(true)
+    } catch (e) {
+      const detail = e?.response?.data?.detail || 'Login failed'
+      setError(detail)
+      if (detail === 'Access blocked by admin') {
+        setIsBlockedView(true)
+      }
+    }
+  }
+
+  const registerRecruiter = async () => {
+    if (!registerName || !registerEmail || !registerPassword) return
+    try {
+      setError('')
+      await api.post('/auth/register', {
+        full_name: registerName,
+        email: registerEmail,
+        password: registerPassword,
+        role: 'recruiter',
+      })
+      setLoginEmail(registerEmail)
+      setLoginPassword(registerPassword)
+      setRegisterName('')
+      setRegisterEmail('')
+      setRegisterPassword('')
+      addActivity('Recruiter account registered')
+      window.alert('Registration successful. You can now login.')
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Registration failed')
+    }
+  }
+
+  const toggleUserAccess = async (userId, nextActive) => {
+    try {
+      setError('')
+      await api.patch(`/auth/users/${userId}/status`, { is_active: nextActive })
+      await loadSystemUsers()
+      addActivity(`User ${nextActive ? 'unblocked' : 'blocked'} by admin`)
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Failed to update user status')
+    }
   }
 
   const navItems = [
@@ -442,27 +507,43 @@ export default function App() {
   ]
 
   if (!isAuthenticated) {
+    if (isBlockedView) {
+      return (
+        <div className="app-layout">
+          <main className="app-shell">
+            <section className="card login-card">
+              <h2>Access Blocked</h2>
+              <p className="hint">Your account has been blocked by an administrator.</p>
+              <button className="secondary" onClick={() => setIsBlockedView(false)}>Back to Login</button>
+            </section>
+          </main>
+        </div>
+      )
+    }
     return (
       <div className="app-layout">
         <main className="app-shell">
           <section className="card login-card">
             <h2>Login Screen</h2>
             <p className="hint">Auth entry point</p>
+            {error ? <div className="error-box">{error}</div> : null}
             <input className="input" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="Email" />
             <input className="input" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} placeholder="Password" />
-            <select className="input" value={loginRole} onChange={(e) => setLoginRole(e.target.value)}>
-              <option value="recruiter">Recruiter</option>
-              <option value="admin">Admin</option>
-            </select>
+            <p className="hint">Role will be determined by registered account credentials.</p>
             <button
               className="primary"
-              onClick={() => {
-                setUserRole(loginRole)
-                setIsAuthenticated(true)
-              }}
+              onClick={login}
               disabled={!loginEmail || !loginPassword}
             >
               Sign in
+            </button>
+            <hr />
+            <h3>Recruiter Registration</h3>
+            <input className="input" value={registerName} onChange={(e) => setRegisterName(e.target.value)} placeholder="Full name" />
+            <input className="input" value={registerEmail} onChange={(e) => setRegisterEmail(e.target.value)} placeholder="Recruiter email" />
+            <input className="input" type="password" value={registerPassword} onChange={(e) => setRegisterPassword(e.target.value)} placeholder="Password (min 6)" />
+            <button className="secondary" onClick={registerRecruiter} disabled={!registerName || !registerEmail || !registerPassword}>
+              Register Recruiter
             </button>
           </section>
         </main>
@@ -496,6 +577,7 @@ export default function App() {
           <div>
             <h1>Resume Matching Agent</h1>
             <p className="hint">AI-assisted screening dashboard for recruiters</p>
+            <p className="hint">Signed in as {currentUserName || 'User'} ({userRole})</p>
           </div>
           <div className="actions-row">
             <input
@@ -967,6 +1049,46 @@ export default function App() {
             </ul>
             <label className="hint">Users (comma-separated emails)</label>
             <input className="input" value={adminUsers} onChange={(e) => setAdminUsers(e.target.value)} />
+            <div className="inline-actions">
+              <button className="secondary" onClick={loadSystemUsers}>Review All Users</button>
+            </div>
+            {(systemUsers || []).length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Email</th>
+                      <th>Role</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {systemUsers.map((user) => (
+                      <tr key={user.id}>
+                        <td>{user.full_name}</td>
+                        <td>{user.email}</td>
+                        <td>{user.role}</td>
+                        <td>{user.is_active ? 'Active' : 'Blocked'}</td>
+                        <td>
+                          {user.role === 'admin' ? (
+                            <span className="hint">Protected</span>
+                          ) : (
+                            <button
+                              className={user.is_active ? 'danger small' : 'secondary small'}
+                              onClick={() => toggleUserAccess(user.id, !user.is_active)}
+                            >
+                              {user.is_active ? 'Block Access' : 'Unblock'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
             <label className="hint">Scoring config</label>
             <select className="input" value={adminScoringMode} onChange={(e) => setAdminScoringMode(e.target.value)}>
               <option value="llm_with_fallback">LLM with fallback</option>

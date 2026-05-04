@@ -19,6 +19,23 @@ class MatchLevel(str, enum.Enum):
     weak = 'weak'
 
 
+class UserRole(str, enum.Enum):
+    recruiter = 'recruiter'
+    admin = 'admin'
+
+
+class User(Base):
+    __tablename__ = 'users'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.recruiter)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Candidate(Base):
     __tablename__ = 'candidates'
 

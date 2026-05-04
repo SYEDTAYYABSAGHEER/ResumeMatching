@@ -1,7 +1,19 @@
-from app.models.entities import Candidate, Job, JobRequirement, RequirementType
+from app.models.entities import Candidate, Job, JobRequirement, RequirementType, User, UserRole
+from app.services.auth import hash_password
 
 
 def seed_dummy_data(db):
+    existing_admin = db.query(User).filter(User.role == UserRole.admin).first()
+    if existing_admin is None:
+        db.add(
+            User(
+                full_name='System Admin',
+                email='admin@example.com',
+                password_hash=hash_password('admin123'),
+                role=UserRole.admin,
+            )
+        )
+
     existing_candidates = db.query(Candidate).count()
     existing_jobs = db.query(Job).count()
 
