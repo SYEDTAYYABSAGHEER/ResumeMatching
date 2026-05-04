@@ -19,6 +19,7 @@ class CandidateUpdate(BaseModel):
     current_title: str | None = None
     years_of_experience: float | None = None
     raw_text: str | None = None
+    profile_json: dict | None = None
 
 
 class JobRequirementIn(BaseModel):

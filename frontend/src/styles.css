@@ -259,6 +259,22 @@ button:disabled {
   margin: 4px 0 0;
 }
 
+.login-card {
+  max-width: 440px;
+  margin: 60px auto;
+}
+
+.select-inline {
+  margin-bottom: 0;
+  min-width: 260px;
+}
+
+a.secondary {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
 .table-wrap {
   overflow-x: auto;
 }

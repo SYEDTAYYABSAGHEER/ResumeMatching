@@ -6,6 +6,11 @@ const api = axios.create({ baseURL: 'http://localhost:8000/api' })
 
 export default function App() {
   const [activePage, setActivePage] = useState('dashboard')
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [loginEmail, setLoginEmail] = useState('admin@example.com')
+  const [loginPassword, setLoginPassword] = useState('password')
+  const [loginRole, setLoginRole] = useState('recruiter')
+  const [userRole, setUserRole] = useState('recruiter')
   const [candidates, setCandidates] = useState([])
   const [jobs, setJobs] = useState([])
   const [matches, setMatches] = useState([])
@@ -38,6 +43,54 @@ export default function App() {
   const [editJobSeniority, setEditJobSeniority] = useState('')
   const [editJobDescription, setEditJobDescription] = useState('')
   const [previousPage, setPreviousPage] = useState('candidates')
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [analysisCandidateId, setAnalysisCandidateId] = useState('')
+  const [jobDetailId, setJobDetailId] = useState('')
+  const [comparisonCandidateA, setComparisonCandidateA] = useState('')
+  const [comparisonCandidateB, setComparisonCandidateB] = useState('')
+  const [selectedOutreachMatchId, setSelectedOutreachMatchId] = useState('')
+  const [outreachDraft, setOutreachDraft] = useState('')
+  const [reportCandidateId, setReportCandidateId] = useState('')
+  const [adminScoringMode, setAdminScoringMode] = useState('llm_with_fallback')
+  const [adminAtsProvider, setAdminAtsProvider] = useState('Greenhouse')
+  const [adminUsers, setAdminUsers] = useState('admin@example.com')
+
+  const uploadedTodayCount = useMemo(() => {
+    const now = Date.now()
+    const oneDayMs = 24 * 60 * 60 * 1000
+    const freshCandidates = candidates.filter((c) => c.created_at && (now - new Date(c.created_at).getTime()) <= oneDayMs).length
+    const freshJobs = jobs.filter((j) => j.created_at && (now - new Date(j.created_at).getTime()) <= oneDayMs).length
+    return freshCandidates + freshJobs
+  }, [candidates, jobs])
+
+  const topCandidatesByScore = useMemo(() => {
+    const byCandidate = new Map()
+    matches.forEach((m) => {
+      const prev = byCandidate.get(m.candidate_id)
+      if (!prev || m.total_score_percent > prev.score) {
+        byCandidate.set(m.candidate_id, { score: m.total_score_percent, match_level: m.match_level })
+      }
+    })
+    return Array.from(byCandidate.entries())
+      .map(([candidateId, data]) => {
+        const c = candidates.find((item) => item.id === candidateId)
+        return { candidateId, candidateName: c?.full_name || `Candidate #${candidateId}`, ...data }
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5)
+  }, [matches, candidates])
+
+  const jobsWithMostCandidates = useMemo(() => {
+    const counts = new Map()
+    matches.forEach((m) => counts.set(m.job_id, (counts.get(m.job_id) || 0) + 1))
+    return Array.from(counts.entries())
+      .map(([jobId, count]) => {
+        const j = jobs.find((item) => item.id === jobId)
+        return { jobId, jobTitle: j?.title || `Job #${jobId}`, count }
+      })
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5)
+  }, [matches, jobs])
 
   const refresh = async () => {
     const [c, j, m, d] = await Promise.all([
@@ -117,8 +170,15 @@ export default function App() {
       const formData = new FormData()
       formData.append('full_name', candidateName)
       formData.append('file', uploadFile)
-      await api.post('/candidates/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+      await api.post('/candidates/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (event) => {
+          if (!event.total) return
+          setUploadProgress(Math.round((event.loaded / event.total) * 100))
+        },
+      })
       setUploadFile(null)
+      setUploadProgress(0)
       await refresh()
       addActivity(`Candidate "${candidateName}" uploaded from file`)
     } catch (e) {
@@ -331,13 +391,84 @@ export default function App() {
     }
   }
 
+  const runCandidateAnalysisFromSelector = async () => {
+    if (!analysisCandidateId) return
+    await viewCandidate(Number(analysisCandidateId))
+  }
+
+  const activeJobMatches = useMemo(() => {
+    if (!jobDetailId) return []
+    return matches
+      .filter((m) => m.job_id === Number(jobDetailId))
+      .sort((a, b) => b.total_score_percent - a.total_score_percent)
+  }, [matches, jobDetailId])
+
+  const selectedOutreachMatch = useMemo(() => {
+    if (!selectedOutreachMatchId) return null
+    return matches.find((m) => m.id === Number(selectedOutreachMatchId)) || null
+  }, [matches, selectedOutreachMatchId])
+
+  useEffect(() => {
+    if (!selectedOutreachMatch) return
+    setOutreachDraft(selectedOutreachMatch.outreach_email || '')
+  }, [selectedOutreachMatch])
+
+  const sendOutreach = () => {
+    if (!selectedOutreachMatch) return
+    addActivity(`Outreach email prepared for Candidate #${selectedOutreachMatch.candidate_id} and Job #${selectedOutreachMatch.job_id}`)
+    window.alert('Outreach email marked as sent (demo flow).')
+  }
+
+  const logout = () => {
+    setIsAuthenticated(false)
+    setActivePage('dashboard')
+    setSelectedCandidate(null)
+    setCandidateAnalysis(null)
+    setSelectedJob(null)
+  }
+
   const navItems = [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'candidates', label: 'Candidates' },
-    { id: 'imports', label: 'Imports' },
-    { id: 'jobs', label: 'Jobs' },
-    { id: 'matches', label: 'Matches' },
+    { id: 'upload-cv', label: 'Upload CV' },
+    { id: 'upload-job', label: 'Upload Job Description' },
+    { id: 'candidate-list', label: 'Candidate List' },
+    { id: 'job-list', label: 'Job List' },
+    { id: 'candidate-match-detail', label: 'Candidate Match Detail' },
+    { id: 'job-match-detail', label: 'Job Match Detail' },
+    { id: 'comparison', label: 'Comparison Screen' },
+    { id: 'outreach-email', label: 'Outreach Email' },
+    { id: 'reports', label: 'Reports' },
+    ...(userRole === 'admin' ? [{ id: 'admin-settings', label: 'Admin Settings' }] : []),
   ]
+
+  if (!isAuthenticated) {
+    return (
+      <div className="app-layout">
+        <main className="app-shell">
+          <section className="card login-card">
+            <h2>Login Screen</h2>
+            <p className="hint">Auth entry point</p>
+            <input className="input" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder="Email" />
+            <input className="input" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} placeholder="Password" />
+            <select className="input" value={loginRole} onChange={(e) => setLoginRole(e.target.value)}>
+              <option value="recruiter">Recruiter</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button
+              className="primary"
+              onClick={() => {
+                setUserRole(loginRole)
+                setIsAuthenticated(true)
+              }}
+              disabled={!loginEmail || !loginPassword}
+            >
+              Sign in
+            </button>
+          </section>
+        </main>
+      </div>
+    )
+  }
 
   return (
     <div className={`app-layout ${darkMode ? 'dark' : ''}`}>
@@ -357,6 +488,7 @@ export default function App() {
         <button className="secondary full-width" onClick={() => setDarkMode((v) => !v)}>
           {darkMode ? 'Switch to Light' : 'Switch to Dark'}
         </button>
+        <button className="danger full-width" onClick={logout}>Logout</button>
       </aside>
 
       <main className="app-shell">
@@ -383,30 +515,43 @@ export default function App() {
             <section className="stats-grid">
               <div className="card stat-card"><h3>{dashboard?.total_candidates ?? candidates.length}</h3><p>Total Candidates</p></div>
               <div className="card stat-card"><h3>{dashboard?.total_jobs ?? jobs.length}</h3><p>Total Jobs</p></div>
+              <div className="card stat-card"><h3>{uploadedTodayCount}</h3><p>Uploaded Today</p></div>
               <div className="card stat-card"><h3>{dashboard?.average_match_score ?? 0}%</h3><p>Average Score</p></div>
               <div className="card stat-card"><h3>{dashboard?.risk_alerts ?? 0}</h3><p>Risk Alerts</p></div>
             </section>
 
             <section className="grid">
               <div className="card">
-                <h2>Recent Activity</h2>
+                <h2>Top Candidates by Score</h2>
                 <ul className="list">
-                  {activity.length ? activity.map((a, idx) => <li key={idx}>{a}</li>) : <li>No activity yet</li>}
+                  {topCandidatesByScore.length
+                    ? topCandidatesByScore.map((row) => <li key={row.candidateId}>{row.candidateName} - {row.score}% ({row.match_level})</li>)
+                    : <li>No scored candidates yet</li>}
                 </ul>
               </div>
               <div className="card">
-                <h2>Quick Actions</h2>
-                <p className="hint">Use sidebar pages to upload candidates, create jobs, and review matches.</p>
-                <button className="secondary" onClick={() => setActivePage('imports')}>Go to Imports</button>
+                <h2>Jobs with Most Candidates</h2>
+                <ul className="list">
+                  {jobsWithMostCandidates.length
+                    ? jobsWithMostCandidates.map((row) => <li key={row.jobId}>{row.jobTitle} - {row.count} matches</li>)
+                    : <li>No job match volume yet</li>}
+                </ul>
               </div>
+            </section>
+            <section className="card">
+              <h2>Recent Activity</h2>
+              <ul className="list">
+                {activity.length ? activity.map((a, idx) => <li key={idx}>{a}</li>) : <li>No activity yet</li>}
+              </ul>
             </section>
           </>
         ) : null}
 
-        {activePage === 'candidates' ? (
+        {activePage === 'candidate-list' ? (
           <section className="grid">
             <div className="card">
-              <h2>Create Candidate (Manual)</h2>
+              <h2>Candidate List</h2>
+              <p className="hint">Filterable and actionable candidate index.</p>
               <input className="input" placeholder="Full name" value={candidateName} onChange={(e) => setCandidateName(e.target.value)} />
               <textarea className="input" placeholder="Paste CV text" value={candidateText} onChange={(e) => setCandidateText(e.target.value)} rows={8} />
               <button className="secondary" onClick={createCandidate} disabled={loading}>Save Candidate</button>
@@ -445,6 +590,20 @@ export default function App() {
           </section>
         ) : null}
 
+        {activePage === 'candidate-match-detail' ? (
+          <section className="card">
+            <h2>Candidate Match Detail</h2>
+            <p className="hint">Full score table, evidence and gaps.</p>
+            <div className="inline-actions">
+              <select className="input select-inline" value={analysisCandidateId} onChange={(e) => setAnalysisCandidateId(e.target.value)}>
+                <option value="">Select candidate</option>
+                {candidates.map((c) => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+              </select>
+              <button className="secondary" onClick={runCandidateAnalysisFromSelector} disabled={!analysisCandidateId}>Load Analysis</button>
+            </div>
+          </section>
+        ) : null}
+
         {activePage === 'candidate-analysis' ? (
           <section className="card">
             <div className="analysis-header">
@@ -460,11 +619,30 @@ export default function App() {
                 <span className={`badge ${String(candidateAnalysis?.section_a?.match_level || 'unscored').toLowerCase()}`}>
                   {(candidateAnalysis?.section_a?.match_level || 'unscored').toUpperCase()}
                 </span>
-                <button className="secondary small" onClick={() => setActivePage(previousPage || 'candidates')}>
+                <button className="secondary small" onClick={() => setActivePage(previousPage || 'candidate-list')}>
                   Back
                 </button>
               </div>
             </div>
+
+            <section className="analysis-section">
+              <h3>Candidate Profile Fields</h3>
+              <div className="summary-grid professional">
+                <div className="summary-item"><span>Email</span><strong>{selectedCandidate?.email || '-'}</strong></div>
+                <div className="summary-item"><span>Phone</span><strong>{selectedCandidate?.phone || '-'}</strong></div>
+                <div className="summary-item"><span>Seniority level</span><strong>{selectedCandidate?.profile_json?.seniority_level || '-'}</strong></div>
+                <div className="summary-item"><span>Technical skills</span><strong>{selectedCandidate?.profile_json?.technical_skills || '-'}</strong></div>
+                <div className="summary-item"><span>Soft skills</span><strong>{selectedCandidate?.profile_json?.soft_skills || '-'}</strong></div>
+                <div className="summary-item"><span>Tools & technologies</span><strong>{selectedCandidate?.profile_json?.tools_technologies || '-'}</strong></div>
+                <div className="summary-item"><span>Work history</span><strong>{selectedCandidate?.profile_json?.work_history || '-'}</strong></div>
+                <div className="summary-item"><span>Education</span><strong>{selectedCandidate?.profile_json?.education || '-'}</strong></div>
+                <div className="summary-item"><span>Certifications</span><strong>{selectedCandidate?.profile_json?.certifications || '-'}</strong></div>
+                <div className="summary-item"><span>Languages</span><strong>{selectedCandidate?.profile_json?.languages || '-'}</strong></div>
+                <div className="summary-item"><span>Domain expertise</span><strong>{selectedCandidate?.profile_json?.domain_expertise || '-'}</strong></div>
+                <div className="summary-item"><span>Employment type preference</span><strong>{selectedCandidate?.profile_json?.employment_type_preference || '-'}</strong></div>
+                <div className="summary-item"><span>Work authorization</span><strong>{selectedCandidate?.profile_json?.work_authorization || '-'}</strong></div>
+              </div>
+            </section>
 
             <section className="analysis-section">
               <h3>Section A: Candidate Summary Card</h3>
@@ -555,14 +733,16 @@ export default function App() {
           </section>
         ) : null}
 
-        {activePage === 'imports' ? (
+        {activePage === 'upload-cv' ? (
           <section className="grid">
             <div className="card">
-              <h2>Upload CV File (MinIO)</h2>
+              <h2>Upload CV</h2>
+              <p className="hint">File upload with progress</p>
               <input className="input" placeholder="Full name" value={candidateName} onChange={(e) => setCandidateName(e.target.value)} />
               <input className="input" type="file" accept=".pdf,.docx,.csv" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
               <p className="hint">Supported: PDF, DOCX, CSV</p>
               <button className="secondary" onClick={uploadCandidateFile} disabled={loading}>Upload and Parse</button>
+              {uploadProgress > 0 ? <p className="hint">Upload progress: {uploadProgress}%</p> : null}
             </div>
             <div className="card">
               <h2>Import from Google Drive</h2>
@@ -574,17 +754,25 @@ export default function App() {
           </section>
         ) : null}
 
-        {activePage === 'jobs' ? (
+        {activePage === 'upload-job' ? (
           <section className="grid">
             <div className="card">
-              <h2>Create Job</h2>
+              <h2>Upload Job Description</h2>
+              <p className="hint">Paste, upload-style form entry for job details and requirements.</p>
               <input className="input" placeholder="Job title" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} />
               <textarea className="input" placeholder="Paste job description" value={jobDesc} onChange={(e) => setJobDesc(e.target.value)} rows={5} />
               <textarea className="input" value={jobReqs} onChange={(e) => setJobReqs(e.target.value)} rows={4} />
-              <button className="secondary" onClick={createJob} disabled={loading}>Save Job</button>
+              <button className="secondary" onClick={createJob} disabled={loading}>Save Job Description</button>
             </div>
+          </section>
+        ) : null}
+
+        {activePage === 'job-list' ? (
+          <section className="grid">
             <div className="card">
-              <h2>Jobs ({filteredJobs.length})</h2>
+              <h2>Job List</h2>
+              <p className="hint">All active job descriptions.</p>
+              <h3>Jobs ({filteredJobs.length})</h3>
               <ul className="list">
                 {filteredJobs.map((j) => (
                   <li key={j.id} className="list-item-actions">
@@ -662,6 +850,135 @@ export default function App() {
                 </div>
               </div>
             ) : null}
+          </section>
+        ) : null}
+
+        {activePage === 'job-match-detail' ? (
+          <section className="card">
+            <h2>Job Match Detail</h2>
+            <p className="hint">Ranked shortlist for a selected job.</p>
+            <select className="input" value={jobDetailId} onChange={(e) => setJobDetailId(e.target.value)}>
+              <option value="">Select job</option>
+              {jobs.map((j) => <option key={j.id} value={j.id}>{j.title}</option>)}
+            </select>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Candidate</th><th>Score %</th><th>Level</th><th>Risk</th><th>Summary</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeJobMatches.map((m) => {
+                    const candidate = candidates.find((c) => c.id === m.candidate_id)
+                    return (
+                      <tr key={m.id}>
+                        <td>{candidate?.full_name || `Candidate #${m.candidate_id}`}</td>
+                        <td>{m.total_score_percent}</td>
+                        <td>{m.match_level}</td>
+                        <td>{String(m.risk_flag)}</td>
+                        <td>{m.summary}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
+
+        {activePage === 'comparison' ? (
+          <section className="card">
+            <h2>Comparison Screen</h2>
+            <p className="hint">Side-by-side candidate comparison.</p>
+            <div className="grid">
+              <div>
+                <select className="input" value={comparisonCandidateA} onChange={(e) => setComparisonCandidateA(e.target.value)}>
+                  <option value="">Candidate A</option>
+                  {candidates.map((c) => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+                </select>
+              </div>
+              <div>
+                <select className="input" value={comparisonCandidateB} onChange={(e) => setComparisonCandidateB(e.target.value)}>
+                  <option value="">Candidate B</option>
+                  {candidates.map((c) => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="grid">
+              {[comparisonCandidateA, comparisonCandidateB].map((id, idx) => {
+                const candidate = candidates.find((c) => c.id === Number(id))
+                const candidateMatches = matches.filter((m) => m.candidate_id === Number(id))
+                const avg = candidateMatches.length ? (candidateMatches.reduce((sum, m) => sum + m.total_score_percent, 0) / candidateMatches.length).toFixed(2) : '0'
+                return (
+                  <div key={`cmp-${idx}`} className="card">
+                    <h3>{candidate?.full_name || `Candidate ${idx + 1}`}</h3>
+                    <p><strong>Title:</strong> {candidate?.current_title || '-'}</p>
+                    <p><strong>Experience:</strong> {candidate?.years_of_experience ?? 0} years</p>
+                    <p><strong>Average match %:</strong> {avg}</p>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        ) : null}
+
+        {activePage === 'outreach-email' ? (
+          <section className="card">
+            <h2>Outreach Email</h2>
+            <p className="hint">Draft, edit and send personalized email.</p>
+            <select className="input" value={selectedOutreachMatchId} onChange={(e) => setSelectedOutreachMatchId(e.target.value)}>
+              <option value="">Select match</option>
+              {matches.map((m) => <option key={m.id} value={m.id}>Candidate #{m.candidate_id} - Job #{m.job_id}</option>)}
+            </select>
+            <textarea className="input" rows={8} value={outreachDraft} onChange={(e) => setOutreachDraft(e.target.value)} placeholder="Outreach draft..." />
+            <button className="primary" onClick={sendOutreach} disabled={!selectedOutreachMatchId || !outreachDraft.trim()}>Send Email</button>
+          </section>
+        ) : null}
+
+        {activePage === 'reports' ? (
+          <section className="card">
+            <h2>Reports</h2>
+            <p className="hint">Export match and skill trend reports.</p>
+            <div className="inline-actions">
+              <select className="input select-inline" value={reportCandidateId} onChange={(e) => setReportCandidateId(e.target.value)}>
+                <option value="">Select candidate for CSV export</option>
+                {candidates.map((c) => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+              </select>
+              <a className="secondary small" href={reportCandidateId ? `http://localhost:8000/api/reports/candidate/${reportCandidateId}.csv` : '#'}>Export Candidate Report CSV</a>
+            </div>
+            <h3>Skill Trend (from requirement evidence)</h3>
+            <ul className="list">
+              <li>Total Matches: {matches.length}</li>
+              <li>Strong Matches: {matches.filter((m) => m.match_level === 'strong').length}</li>
+              <li>Risk Alerts: {matches.filter((m) => m.risk_flag).length}</li>
+            </ul>
+          </section>
+        ) : null}
+
+        {activePage === 'admin-settings' ? (
+          <section className="card">
+            <h2>Admin Settings</h2>
+            <p className="hint">Users, scoring config, ATS setup.</p>
+            <h3>User Roles</h3>
+            <ul className="list">
+              <li><strong>Recruiter:</strong> Upload CV/JD, view matches, review shortlists, export reports, send outreach emails.</li>
+              <li><strong>Admin:</strong> Manage users, scoring thresholds, risk rules, and ATS setup.</li>
+            </ul>
+            <label className="hint">Users (comma-separated emails)</label>
+            <input className="input" value={adminUsers} onChange={(e) => setAdminUsers(e.target.value)} />
+            <label className="hint">Scoring config</label>
+            <select className="input" value={adminScoringMode} onChange={(e) => setAdminScoringMode(e.target.value)}>
+              <option value="llm_with_fallback">LLM with fallback</option>
+              <option value="rules_only">Rules only</option>
+            </select>
+            <label className="hint">ATS setup</label>
+            <select className="input" value={adminAtsProvider} onChange={(e) => setAdminAtsProvider(e.target.value)}>
+              <option>Greenhouse</option>
+              <option>Lever</option>
+              <option>Workable</option>
+            </select>
+            <button className="secondary" onClick={() => addActivity('Admin settings updated (UI config demo)')}>Save Settings</button>
           </section>
         ) : null}
 
